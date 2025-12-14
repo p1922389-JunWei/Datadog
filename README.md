@@ -1,11 +1,14 @@
 ## Running with Docker
+**Requirements**
+Make sure you install Docker Desktop. With this, you don't need to create venv.
+All you have to do create the .env file and ask Jun Wei for the env keys
 
 **Start the application:**
 ```bash
 docker-compose up --build
 ```
 
-This will:
+This will automatically:
 - Start the API server on `http://localhost:8000`
 - Run the traffic generator (10 test requests)
 - Display all messages in the chat interface
@@ -19,14 +22,6 @@ This will:
 docker-compose down
 ```
 
-python3 -m venv venv
-source venv/bin/activate 
-pip install -r requirements.txt
+## Tutorial
 
-# activate terminal 1 aka main.py
-dotenv run -- ddtrace-run uvicorn main:app --reload
-
-# activate termimal 2
-python traffic.py
-
-https://youtu.be/YqS3FUdbTxk
+[YouTube Tutorial](https://youtu.be/YqS3FUdbTxk)
