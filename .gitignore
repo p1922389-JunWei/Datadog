@@ -1,1 +1,13 @@
 /Archive.zip
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+.env
+dd-trace.log
