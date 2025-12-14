@@ -7,5 +7,4 @@ dotenv run -- ddtrace-run uvicorn main:app --reload
 
 # activate termimal 2
 python traffic.py
-
 https://youtu.be/YqS3FUdbTxk
