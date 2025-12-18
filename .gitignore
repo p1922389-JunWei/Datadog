@@ -11,3 +11,4 @@ ENV/
 .venv
 .env
 dd-trace.log
+*.pyc
