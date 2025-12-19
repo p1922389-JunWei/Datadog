@@ -4,21 +4,21 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    gemini_api_key: str
-    gemini_model: str = "gemini-flash-latest"
+    GEMINI_API_KEY: str
+    GEMINI_MODEL: str = "gemini-flash-latest"
     
-    dd_service: str = "bearstack"
-    dd_env: str = "development"
-    dd_version: str = "1.0.0"
-    dd_api_key: Optional[str] = None
-    dd_app_key: Optional[str] = None
+    DD_SERVICE: str = "bearstack"
+    DD_ENV: str = "development"
+    DD_VERSION: str = "1.0.0"
+    DD_API_KEY: Optional[str] = None
+    DD_APP_KEY: Optional[str] = None
     
-    redis_host: str = "redis"
-    redis_port: int = 6379
-    redis_db: int = 0
-    cache_ttl_seconds: int = 3600
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    CACHE_TTL_SECONDS: int = 3600
     
-    jailbreak_keywords: list[str] = ["ignore"]
+    JAILBREAK_KEYWORDS: list[str] = ["ignore"]
     
     class Config:
         env_file = ".env"

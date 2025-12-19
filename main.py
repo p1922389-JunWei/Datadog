@@ -1,3 +1,4 @@
+import sys
 import logging
 import hashlib
 from contextlib import asynccontextmanager
@@ -16,9 +17,22 @@ from google.api_core.exceptions import ResourceExhausted
 from pydantic import BaseModel, Field
 
 from config import get_settings
+from timezone_formatter import SingaporeJsonFormatter
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Create the logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# This creates a file named 'app.log' in your project folder
+fileHandler = logging.FileHandler('/tmp/app.log') 
+formatter = SingaporeJsonFormatter('%(timestamp)s %(levelname)s %(message)s ', timestamp=True)
+fileHandler.setFormatter(formatter)
+logger.addHandler(fileHandler)
+
+# 2. Console Handler (For you to see in terminal)
+consoleHandler = logging.StreamHandler()
+consoleHandler.setFormatter(formatter)
+logger.addHandler(consoleHandler)
 
 settings = get_settings()
 
@@ -34,9 +48,9 @@ def get_redis_client() -> Optional[redis.Redis]:
     if redis_client is None:
         try:
             redis_client = redis.Redis(
-                host=settings.redis_host,
-                port=settings.redis_port,
-                db=settings.redis_db,
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
@@ -44,7 +58,7 @@ def get_redis_client() -> Optional[redis.Redis]:
                 health_check_interval=30
             )
             redis_client.ping()
-            logger.info(f"Redis connected: {settings.redis_host}:{settings.redis_port}")
+            logger.info(f"Redis connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
         except (redis.ConnectionError, redis.TimeoutError) as e:
             logger.error(f"Redis connection failed: {e}")
             redis_client = None
@@ -99,10 +113,10 @@ def cache_response(prompt: str, response: str) -> bool:
         cache_key = get_cache_key(prompt)
         client.setex(
             cache_key,
-            settings.cache_ttl_seconds,
+            settings.CACHE_TTL_SECONDS,
             response
         )
-        logger.info(f"Cached response: {cache_key[:20]}... (TTL: {settings.cache_ttl_seconds}s)")
+        logger.info(f"Cached response: {cache_key[:20]}... (TTL: {settings.CACHE_TTL_SECONDS}s)")
         return True
         
     except (redis.ConnectionError, redis.TimeoutError) as e:
@@ -130,14 +144,18 @@ def get_cache_stats() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    genai.configure(api_key=settings.gemini_api_key)
-    app.state.model = genai.GenerativeModel(settings.gemini_model)
+    # Things here happen before startup
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+    app.state.model = genai.GenerativeModel(settings.GEMINI_MODEL)
     
     get_redis_client()
     
-    logger.info(f"Started {settings.dd_service}")
+    logger.info(f"Started {settings.DD_SERVICE}")
+    
+    # passes control to the app
     yield
     
+    # Things here happen on shutdown
     global redis_client
     if redis_client:
         redis_client.close()
@@ -183,13 +201,16 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         "timestamp": datetime.now().isoformat()
     })
     
-    if any(kw.lower() in request.prompt.lower() for kw in settings.jailbreak_keywords):
+    if any(kw.lower() in request.prompt.lower() for kw in settings.JAILBREAK_KEYWORDS):
         if span:
             span.set_tag("security.jailbreak_attempt", "true")
             span.error = 1
             span.set_tag("error.message", "Jailbreak keyword detected")
         
-        logger.warning(f"Security violation: user_id={request.user_id}")
+        logger.warning(f"Security violation: user_id={request.user_id}", extra={
+            "user_id": request.user_id,   # So dat you can filter by user in logs or wherever in Datadog
+            "event_type": "jailbreak"     # Can also filter by event type
+        } )
         security_response = "I cannot comply with that request due to security policies."
         
         chat_history.append({
@@ -283,11 +304,11 @@ async def get_chat_history():
 async def health_check():
     health_status = {
         "status": "ok",
-        "service": settings.dd_service,
+        "service": settings.DD_SERVICE,
         "redis": {
             "connected": False,
-            "host": settings.redis_host,
-            "port": settings.redis_port
+            "host": settings.REDIS_HOST,
+            "port": settings.REDIS_PORT
         },
         "cache": get_cache_stats()
     }

@@ -12,3 +12,4 @@ ENV/
 .env
 dd-trace.log
 *.pyc
+.DS_Store
