@@ -35,7 +35,7 @@ def send_traffic():
             logger.warning(f"[{count}/{NUM_REQUESTS}] ATTACK: {prompt[:50]}")
         
         try:
-            resp = requests.post(URL, json={"prompt": prompt, "user_id": "test_user_123"}, timeout=30)
+            resp = requests.post(URL, json={"prompt": prompt, "user_id": "jakepaul"}, timeout=30)
             
             if resp.status_code == 200:
                 result = resp.json()

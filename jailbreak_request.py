@@ -16,7 +16,7 @@ def send_jailbreak_traffic():
 
         try:
             resp = requests.post(
-                URL, json={"prompt": prompt, "user_id": "test_user_123"})
+                URL, json={"prompt": prompt, "user_id": "jakepaul"})
 
             if resp.status_code == 200:
                 print(f"✅ Success: {resp.json()} \n")
