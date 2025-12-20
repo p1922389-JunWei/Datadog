@@ -1,4 +1,5 @@
 import sys
+import os
 import logging
 import hashlib
 from contextlib import asynccontextmanager
@@ -7,8 +8,11 @@ from datetime import datetime
 from typing import Optional
 
 import redis
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from datadog import initialize, statsd
 from ddtrace import tracer
+from ddtrace.llmobs import LLMObs
 from fastapi import FastAPI, HTTPException, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -19,7 +23,7 @@ from pydantic import BaseModel, Field
 from config import get_settings
 from timezone_formatter import SingaporeJsonFormatter
 
-# Create the logger
+# Create the logger to log into file, console and Datadog
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -34,6 +38,14 @@ consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(formatter)
 logger.addHandler(consoleHandler)
 
+# Setup Datadog StatsD (this is for sending custom metrics to DD)
+options = {
+    'statsd_host': os.getenv('DD_AGENT_HOST', '127.0.0.1'),
+    'statsd_port': 8125
+}
+initialize(**options)
+
+# Get settings from config.py
 settings = get_settings()
 
 chat_history = deque(maxlen=50)
@@ -60,9 +72,11 @@ def get_redis_client() -> Optional[redis.Redis]:
             redis_client.ping()
             logger.info(f"Redis connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
         except (redis.ConnectionError, redis.TimeoutError) as e:
+            statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
             logger.error(f"Redis connection failed: {e}")
             redis_client = None
         except Exception as e:
+            statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
             logger.error(f"Unexpected Redis error: {e}")
             redis_client = None
     
@@ -86,19 +100,23 @@ def get_cached_response(prompt: str) -> Optional[str]:
         
         if cached:
             cache_stats["hits"] += 1
+            statsd.increment('bearstack.cache.hits', tags=['env:development', 'region:sg']) # send metric to Datadog
             logger.info(f"Cache hit: {cache_key[:20]}...")
             return cached
         else:
             cache_stats["misses"] += 1
+            statsd.increment('bearstack.cache.misses', tags=['env:development', 'region:sg']) # send metric to Datadog
             logger.info(f"Cache miss: {cache_key[:20]}...")
             return None
             
     except (redis.ConnectionError, redis.TimeoutError) as e:
         cache_stats["errors"] += 1
+        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
         logger.error(f"Cache read error: {e}")
         return None
     except redis.RedisError as e:
         cache_stats["errors"] += 1
+        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
         logger.error(f"Redis error during read: {e}")
         return None
 
@@ -121,10 +139,12 @@ def cache_response(prompt: str, response: str) -> bool:
         
     except (redis.ConnectionError, redis.TimeoutError) as e:
         cache_stats["errors"] += 1
+        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
         logger.error(f"Cache write error: {e}")
         return False
     except redis.RedisError as e:
         cache_stats["errors"] += 1
+        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
         logger.error(f"Redis error during write: {e}")
         return False
 
@@ -145,12 +165,19 @@ def get_cache_stats() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Things here happen before startup
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    app.state.model = genai.GenerativeModel(settings.GEMINI_MODEL)
+    # Initialize LLM Observability
+    LLMObs.enable(
+        ml_app=settings.DD_SERVICE,
+        integrations_enabled=True,
+        agentless_enabled=False
+    )
+    
+    # Configure Gemini client
+    app.state.client = genai.Client(api_key=settings.GEMINI_API_KEY)
     
     get_redis_client()
     
-    logger.info(f"Started {settings.DD_SERVICE}")
+    logger.info(f"Started {settings.DD_SERVICE} with LLM Observability enabled")
     
     # passes control to the app
     yield
@@ -161,6 +188,7 @@ async def lifespan(app: FastAPI):
         redis_client.close()
         logger.info("Redis connection closed")
     
+    LLMObs.disable()
     logger.info("Shutdown")
 
 
@@ -206,6 +234,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
             span.set_tag("security.jailbreak_attempt", "true")
             span.error = 1
             span.set_tag("error.message", "Jailbreak keyword detected")
+            statsd.increment('bearstack.api.jailbreaks.detected', tags=['env:development', 'region:sg']) # send metric to Datadog
         
         logger.warning(f"Security violation: user_id={request.user_id}", extra={
             "user_id": request.user_id,   # So dat you can filter by user in logs or wherever in Datadog
@@ -245,8 +274,27 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         span.set_tag("cache.hit", "false")
     
     try:
-        response = app.state.model.generate_content(request.prompt)
-        response_text = response.text
+        # Create LLM Observability span for the LLM call
+        with LLMObs.llm(
+            model_name=settings.GEMINI_MODEL,
+            name="gemini_chat",
+            model_provider="google",
+            ml_app=settings.DD_SERVICE
+        ) as llm_span:
+            # Call Gemini API
+            response = app.state.client.models.generate_content(
+                model=settings.GEMINI_MODEL,
+                contents=request.prompt
+            )
+            response_text = response.text
+            
+            # Annotate the span with input/output
+            LLMObs.annotate(
+                span=llm_span,
+                input_data=request.prompt,
+                output_data=response_text,
+                metadata={"user_id": request.user_id, "prompt_length": len(request.prompt), "response_length": len(response_text)}
+            )
         
         if span:
             span.set_tag("response.length", len(response_text))
