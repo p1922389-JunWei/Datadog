@@ -1,18 +1,15 @@
-import sys
-import os
-import logging
 import hashlib
+import logging
+import os
 from contextlib import asynccontextmanager
 from collections import deque
 from datetime import datetime
 from typing import Optional
 
+import google.generativeai as genai
 import redis
-from google import genai
-from google.genai import types
 from datadog import initialize, statsd
 from ddtrace import tracer
-from ddtrace.llmobs import LLMObs
 from fastapi import FastAPI, HTTPException, status
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -21,35 +18,22 @@ from google.api_core.exceptions import ResourceExhausted
 from pydantic import BaseModel, Field
 
 from config import get_settings
-from timezone_formatter import SingaporeJsonFormatter
 
-# Create the logger to log into file, console and Datadog
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# This creates a file named 'app.log' in your project folder
-fileHandler = logging.FileHandler('/tmp/app.log') 
-formatter = SingaporeJsonFormatter('%(timestamp)s %(levelname)s %(message)s ', timestamp=True)
-fileHandler.setFormatter(formatter)
-logger.addHandler(fileHandler)
-
-# 2. Console Handler (For you to see in terminal)
-consoleHandler = logging.StreamHandler()
-consoleHandler.setFormatter(formatter)
-logger.addHandler(consoleHandler)
-
-# Setup Datadog StatsD (this is for sending custom metrics to DD)
-options = {
+statsd_options = {
     'statsd_host': os.getenv('DD_AGENT_HOST', '127.0.0.1'),
     'statsd_port': 8125
 }
-initialize(**options)
+initialize(**statsd_options)
 
-# Get settings from config.py
 settings = get_settings()
 
 chat_history = deque(maxlen=50)
-
 redis_client: Optional[redis.Redis] = None
 cache_stats = {"hits": 0, "misses": 0, "errors": 0}
 
@@ -60,9 +44,9 @@ def get_redis_client() -> Optional[redis.Redis]:
     if redis_client is None:
         try:
             redis_client = redis.Redis(
-                host=settings.REDIS_HOST,
-                port=settings.REDIS_PORT,
-                db=settings.REDIS_DB,
+                host=settings.redis_host,
+                port=settings.redis_port,
+                db=settings.redis_db,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
@@ -70,13 +54,13 @@ def get_redis_client() -> Optional[redis.Redis]:
                 health_check_interval=30
             )
             redis_client.ping()
-            logger.info(f"Redis connected: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+            logger.info(f"Redis connected: {settings.redis_host}:{settings.redis_port}")
         except (redis.ConnectionError, redis.TimeoutError) as e:
-            statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+            statsd.increment('gemini_chat_api.redis.connection_error', tags=[f'env:{settings.dd_env}'])
             logger.error(f"Redis connection failed: {e}")
             redis_client = None
         except Exception as e:
-            statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+            statsd.increment('gemini_chat_api.redis.error', tags=[f'env:{settings.dd_env}'])
             logger.error(f"Unexpected Redis error: {e}")
             redis_client = None
     
@@ -100,23 +84,23 @@ def get_cached_response(prompt: str) -> Optional[str]:
         
         if cached:
             cache_stats["hits"] += 1
-            statsd.increment('bearstack.cache.hits', tags=['env:development', 'region:sg']) # send metric to Datadog
-            logger.info(f"Cache hit: {cache_key[:20]}...")
+            statsd.increment('gemini_chat_api.cache.hits', tags=[f'env:{settings.dd_env}'])
+            logger.debug(f"Cache hit: {cache_key[:20]}...")
             return cached
         else:
             cache_stats["misses"] += 1
-            statsd.increment('bearstack.cache.misses', tags=['env:development', 'region:sg']) # send metric to Datadog
-            logger.info(f"Cache miss: {cache_key[:20]}...")
+            statsd.increment('gemini_chat_api.cache.misses', tags=[f'env:{settings.dd_env}'])
+            logger.debug(f"Cache miss: {cache_key[:20]}...")
             return None
             
     except (redis.ConnectionError, redis.TimeoutError) as e:
         cache_stats["errors"] += 1
-        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+        statsd.increment('gemini_chat_api.redis.error', tags=[f'env:{settings.dd_env}'])
         logger.error(f"Cache read error: {e}")
         return None
     except redis.RedisError as e:
         cache_stats["errors"] += 1
-        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+        statsd.increment('gemini_chat_api.redis.error', tags=[f'env:{settings.dd_env}'])
         logger.error(f"Redis error during read: {e}")
         return None
 
@@ -131,20 +115,20 @@ def cache_response(prompt: str, response: str) -> bool:
         cache_key = get_cache_key(prompt)
         client.setex(
             cache_key,
-            settings.CACHE_TTL_SECONDS,
+            settings.cache_ttl_seconds,
             response
         )
-        logger.info(f"Cached response: {cache_key[:20]}... (TTL: {settings.CACHE_TTL_SECONDS}s)")
+        logger.debug(f"Cached response: {cache_key[:20]}... (TTL: {settings.cache_ttl_seconds}s)")
         return True
         
     except (redis.ConnectionError, redis.TimeoutError) as e:
         cache_stats["errors"] += 1
-        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+        statsd.increment('gemini_chat_api.redis.error', tags=[f'env:{settings.dd_env}'])
         logger.error(f"Cache write error: {e}")
         return False
     except redis.RedisError as e:
         cache_stats["errors"] += 1
-        statsd.increment('bearstack.redis.error', tags=['env:development', 'region:sg']) # send metric to Datadog
+        statsd.increment('gemini_chat_api.redis.error', tags=[f'env:{settings.dd_env}'])
         logger.error(f"Redis error during write: {e}")
         return False
 
@@ -164,41 +148,36 @@ def get_cache_stats() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Things here happen before startup
-    # Initialize LLM Observability
-    LLMObs.enable(
-        ml_app=settings.DD_SERVICE,
-        integrations_enabled=True,
-        agentless_enabled=False
-    )
-    
-    # Configure Gemini client
-    app.state.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    
+    genai.configure(api_key=settings.gemini_api_key)
+    app.state.model = genai.GenerativeModel(settings.gemini_model)
     get_redis_client()
+    logger.info(f"Started {settings.dd_service} (env: {settings.dd_env})")
     
-    logger.info(f"Started {settings.DD_SERVICE} with LLM Observability enabled")
-    
-    # passes control to the app
     yield
     
-    # Things here happen on shutdown
     global redis_client
     if redis_client:
-        redis_client.close()
-        logger.info("Redis connection closed")
+        try:
+            redis_client.close()
+            logger.info("Redis connection closed")
+        except Exception as e:
+            logger.error(f"Error closing Redis connection: {e}")
     
-    LLMObs.disable()
-    logger.info("Shutdown")
+    logger.info("Shutdown complete")
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="Gemini Chat API",
+    description="Chat API with caching and observability",
+    version=settings.dd_version,
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -206,12 +185,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 class ChatRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, max_length=10000)
-    user_id: str = Field(..., min_length=1, max_length=255)
+    prompt: str = Field(..., min_length=1, max_length=10000, description="User prompt")
+    user_id: str = Field(..., min_length=1, max_length=255, description="User identifier")
 
 
 class ChatResponse(BaseModel):
-    response: str
+    response: str = Field(..., description="AI response")
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -229,17 +208,15 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         "timestamp": datetime.now().isoformat()
     })
     
-    if any(kw.lower() in request.prompt.lower() for kw in settings.JAILBREAK_KEYWORDS):
+    if any(kw.lower() in request.prompt.lower() for kw in settings.jailbreak_keywords):
         if span:
             span.set_tag("security.jailbreak_attempt", "true")
             span.error = 1
             span.set_tag("error.message", "Jailbreak keyword detected")
-            statsd.increment('bearstack.api.jailbreaks.detected', tags=['env:development', 'region:sg']) # send metric to Datadog
         
-        logger.warning(f"Security violation: user_id={request.user_id}", extra={
-            "user_id": request.user_id,   # So dat you can filter by user in logs or wherever in Datadog
-            "event_type": "jailbreak"     # Can also filter by event type
-        } )
+        statsd.increment('gemini_chat_api.security.jailbreak_attempts', tags=[f'env:{settings.dd_env}'])
+        logger.warning(f"Security violation: user_id={request.user_id}")
+        
         security_response = "I cannot comply with that request due to security policies."
         
         chat_history.append({
@@ -258,7 +235,7 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
             span.set_tag("cache.hit", "true")
             span.set_tag("response.length", len(cached_response))
         
-        logger.info(f"Returning cached response: user_id={request.user_id}")
+        logger.debug(f"Returning cached response: user_id={request.user_id}")
         
         chat_history.append({
             "role": "assistant",
@@ -274,30 +251,34 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         span.set_tag("cache.hit", "false")
     
     try:
-        # Create LLM Observability span for the LLM call
-        with LLMObs.llm(
-            model_name=settings.GEMINI_MODEL,
-            name="gemini_chat",
-            model_provider="google",
-            ml_app=settings.DD_SERVICE
-        ) as llm_span:
-            # Call Gemini API
-            response = app.state.client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=request.prompt
-            )
-            response_text = response.text
-            
-            # Annotate the span with input/output
-            LLMObs.annotate(
-                span=llm_span,
-                input_data=request.prompt,
-                output_data=response_text,
-                metadata={"user_id": request.user_id, "prompt_length": len(request.prompt), "response_length": len(response_text)}
-            )
+        response = app.state.model.generate_content(request.prompt)
+        response_text = response.text
         
         if span:
             span.set_tag("response.length", len(response_text))
+        
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+        
+        try:
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                input_tokens = getattr(usage, 'prompt_token_count', 0) or 0
+                output_tokens = getattr(usage, 'candidates_token_count', 0) or 0
+                total_tokens = getattr(usage, 'total_token_count', 0) or 0
+        except Exception as e:
+            logger.warning(f"Error extracting token usage: {e}")
+        
+        if total_tokens > 0:
+            statsd.histogram('gemini_chat_api.llm.tokens.input', input_tokens, tags=[f'env:{settings.dd_env}'])
+            statsd.histogram('gemini_chat_api.llm.tokens.output', output_tokens, tags=[f'env:{settings.dd_env}'])
+            statsd.histogram('gemini_chat_api.llm.tokens.total', total_tokens, tags=[f'env:{settings.dd_env}'])
+            
+            if span:
+                span.set_tag("llm.tokens.input", input_tokens)
+                span.set_tag("llm.tokens.output", output_tokens)
+                span.set_tag("llm.tokens.total", total_tokens)
         
         cache_success = cache_response(request.prompt, response_text)
         if span:
@@ -315,6 +296,9 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     except ResourceExhausted as e:
         if span:
             span.set_exc_info(type(e), e, e.__traceback__)
+            span.set_tag("error.type", "rate_limit")
+        
+        statsd.increment('gemini_chat_api.errors.rate_limit', tags=[f'env:{settings.dd_env}'])
         logger.error(f"Rate limit exceeded: user_id={request.user_id}")
         
         chat_history.append({
@@ -325,22 +309,31 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
             "error": True
         })
         
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please try again later."
+        )
     
     except Exception as e:
         if span:
             span.set_exc_info(type(e), e, e.__traceback__)
-        logger.error(f"Error: {e}", exc_info=True)
+            span.set_tag("error.type", "internal_error")
+        
+        statsd.increment('gemini_chat_api.errors.internal', tags=[f'env:{settings.dd_env}'])
+        logger.error(f"Error processing request: {e}", exc_info=True)
         
         chat_history.append({
             "role": "assistant",
-            "content": f"Error: {str(e)}",
+            "content": "An error occurred while processing your request.",
             "user_id": request.user_id,
             "timestamp": datetime.now().isoformat(),
             "error": True
         })
         
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
 
 @app.get("/history")
@@ -352,11 +345,13 @@ async def get_chat_history():
 async def health_check():
     health_status = {
         "status": "ok",
-        "service": settings.DD_SERVICE,
+        "service": settings.dd_service,
+        "version": settings.dd_version,
+        "env": settings.dd_env,
         "redis": {
             "connected": False,
-            "host": settings.REDIS_HOST,
-            "port": settings.REDIS_PORT
+            "host": settings.redis_host,
+            "port": settings.redis_port
         },
         "cache": get_cache_stats()
     }
@@ -366,7 +361,7 @@ async def health_check():
         try:
             client.ping()
             health_status["redis"]["connected"] = True
-        except (redis.ConnectionError, redis.TimeoutError, redis.RedisError) as e:
+        except Exception as e:
             logger.error(f"Redis health check failed: {e}")
             health_status["redis"]["error"] = str(e)
     

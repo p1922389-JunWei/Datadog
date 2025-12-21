@@ -1,21 +1,17 @@
-# pycache and its related items
+/Archive.zip
+<<<<<<< HEAD
+
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-*.pyc
-
-# Venv folder
 venv/
-.venv
-
-# .env related items
 env/
 ENV/
+.venv
 .env
-
-# Misc
 dd-trace.log
-.DS_Store
-/Archive.zip
+=======
+*.pyc
+>>>>>>> 478e20a32a052f32b6916773dd6e67f48446ff36
