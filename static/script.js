@@ -8,16 +8,13 @@ let userText = null;
 let lastMessageCount = 0;
 let isLoadingHistory = false;
 
-// AJAX function to load chat history from server logs
 async function loadChatHistory() {
-    // Prevent multiple simultaneous AJAX requests
     if (isLoadingHistory) return;
     
     isLoadingHistory = true;
     
     try {
-        // AJAX call to get message logs from backend
-        const response = await fetch('http://localhost:8000/history', {
+        const response = await fetch('/history', {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -31,18 +28,14 @@ async function loadChatHistory() {
         const data = await response.json();
         
         if (data.messages && data.messages.length > 0) {
-            // Only update if there are new messages (efficient update)
             if (data.messages.length !== lastMessageCount) {
-                // Remove welcome screen
                 removeWelcomeScreen();
                 
-                // Clear existing messages to refresh with latest logs
                 const welcomeScreen = chatContainer.querySelector('.welcome-screen');
                 if (!welcomeScreen) {
                     chatContainer.innerHTML = '';
                 }
                 
-                // Render all messages from log
                 data.messages.forEach(msg => {
                     const className = msg.role === "user" ? "outgoing" : "incoming";
                     const html = `<p>${msg.content}</p>`;
@@ -52,7 +45,6 @@ async function loadChatHistory() {
                 
                 lastMessageCount = data.messages.length;
                 
-                // Scroll to bottom to show latest messages
                 chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
             }
         }
@@ -63,10 +55,8 @@ async function loadChatHistory() {
     }
 }
 
-// Load history when page loads
 document.addEventListener('DOMContentLoaded', () => {
     loadChatHistory();
-    // Initialize Lucide icons
     if (typeof lucide !== 'undefined') {
         lucide.createIcons();
     }
@@ -92,7 +82,6 @@ const createChatElement = (content, className) => {
     
     chatWrapper.appendChild(chatDiv);
     
-    // Initialize Lucide icon after adding to DOM
     setTimeout(() => {
         lucide.createIcons();
     }, 0);
@@ -108,13 +97,11 @@ const removeWelcomeScreen = () => {
     }
 }
 
-// AJAX function to send message and get response
 const getChatResponse = async (incomingChatDiv) => {
-    const API_URL = "http://localhost:8000/chat";
+    const API_URL = "/chat";
     const chatDetails = incomingChatDiv.querySelector(".chat-details");
 
     try {
-        // Send AJAX POST request to chat endpoint
         const response = await fetch(API_URL, {
             method: "POST",
             headers: {
@@ -132,10 +119,8 @@ const getChatResponse = async (incomingChatDiv) => {
             throw new Error(data.detail || "Something went wrong");
         }
         
-        // Replace typing animation with response received from AJAX
         chatDetails.innerHTML = `<p>${data.response}</p>`;
         
-        // Reload logs via AJAX to show the new message in the log
         setTimeout(() => {
             loadChatHistory();
         }, 1000);
@@ -164,37 +149,40 @@ const showTypingAnimation = () => {
 }
 
 const handleOutgoingChat = async () => {
+    if (isGeneratingTraffic) {
+        console.log("Traffic generation in progress, ignoring chat input");
+        return;
+    }
+    
     userText = chatInput.value.trim();
     if (!userText) return;
 
-    // Remove welcome screen if it exists
     removeWelcomeScreen();
 
-    // Clear input field and reset height
     chatInput.value = "";
     chatInput.style.height = "auto";
 
-    // Display user's message immediately (optimistic UI)
     const html = `<p>${userText}</p>`;
     const outgoingChatDiv = createChatElement(html, "outgoing");
     chatContainer.appendChild(outgoingChatDiv);
     chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
     
-    // Show typing animation then send AJAX request
     setTimeout(showTypingAnimation, 500);
 }
 
-// Event listeners
 sendButton.addEventListener("click", handleOutgoingChat);
 
 chatInput.addEventListener("keydown", (e) => {
+    if (isGeneratingTraffic) {
+        e.preventDefault();
+        return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleOutgoingChat();
     }
 });
 
-// Auto-resize textarea
 chatInput.addEventListener("input", () => {
     chatInput.style.height = "auto";
     chatInput.style.height = `${chatInput.scrollHeight}px`;
@@ -203,7 +191,173 @@ chatInput.addEventListener("input", () => {
 const POLL_INTERVAL = 3000;
 
 setInterval(() => {
-    loadChatHistory(); // AJAX call to fetch latest logs
+    loadChatHistory();
 }, POLL_INTERVAL);
 
 console.log(`🔄 AJAX polling enabled: fetching message logs every ${POLL_INTERVAL/1000}s`);
+
+let trafficBtn;
+let loadingOverlay;
+let isGeneratingTraffic = false;
+
+function getElements() {
+    if (!trafficBtn) trafficBtn = document.querySelector("#traffic-btn");
+    if (!loadingOverlay) loadingOverlay = document.querySelector("#loading-overlay");
+}
+
+function showLoading() {
+    getElements();
+    
+    if (!loadingOverlay) {
+        loadingOverlay = document.querySelector("#loading-overlay");
+    }
+    if (!chatInput) {
+        chatInput = document.querySelector("#chat-input");
+    }
+    if (!sendButton) {
+        sendButton = document.querySelector("#send-btn");
+    }
+    if (!trafficBtn) {
+        trafficBtn = document.querySelector("#traffic-btn");
+    }
+    
+    if (!loadingOverlay || !chatInput || !sendButton || !trafficBtn) {
+        console.error("Required elements not found:", {
+            loadingOverlay: !!loadingOverlay,
+            chatInput: !!chatInput,
+            sendButton: !!sendButton,
+            trafficBtn: !!trafficBtn
+        });
+        return;
+    }
+    
+    isGeneratingTraffic = true;
+    loadingOverlay.style.display = "flex";
+    loadingOverlay.classList.add("active");
+    chatInput.disabled = true;
+    sendButton.disabled = true;
+    trafficBtn.disabled = true;
+    const span = trafficBtn.querySelector("span");
+    if (span) span.textContent = "Generating...";
+    
+    console.log("Loading overlay shown");
+}
+
+function hideLoading() {
+    getElements();
+    
+    if (!loadingOverlay) {
+        loadingOverlay = document.querySelector("#loading-overlay");
+    }
+    if (!chatInput) {
+        chatInput = document.querySelector("#chat-input");
+    }
+    if (!sendButton) {
+        sendButton = document.querySelector("#send-btn");
+    }
+    if (!trafficBtn) {
+        trafficBtn = document.querySelector("#traffic-btn");
+    }
+    
+    if (!loadingOverlay || !chatInput || !sendButton || !trafficBtn) {
+        return;
+    }
+    
+    isGeneratingTraffic = false;
+    loadingOverlay.classList.remove("active");
+    loadingOverlay.style.display = "none";
+    chatInput.disabled = false;
+    sendButton.disabled = false;
+    trafficBtn.disabled = false;
+    const span = trafficBtn.querySelector("span");
+    if (span) span.textContent = "Generate Traffic";
+    
+    console.log("Loading overlay hidden");
+}
+
+async function generateTraffic() {
+    if (isGeneratingTraffic) {
+        return;
+    }
+
+    showLoading();
+
+    try {
+        const response = await fetch("/generate-traffic?num_requests=10&delay=2", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+            throw new Error(errorData.detail || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        console.log("Traffic generation started:", data);
+
+        const estimatedTime = (data.num_requests * data.delay_seconds) + 10;
+        
+        getElements();
+        const loadingText = loadingOverlay?.querySelector(".loading-text");
+        if (loadingText) {
+            let secondsRemaining = estimatedTime;
+            
+            const progressInterval = setInterval(() => {
+                secondsRemaining--;
+                if (secondsRemaining > 0) {
+                    loadingText.textContent = `Generating ${data.num_requests} requests... ${secondsRemaining}s remaining`;
+                } else {
+                    loadingText.textContent = "Finishing up...";
+                }
+            }, 1000);
+
+            setTimeout(() => {
+                clearInterval(progressInterval);
+                if (loadingText) {
+                    loadingText.textContent = "Complete!";
+                }
+                setTimeout(() => {
+                    hideLoading();
+                    console.log("Traffic generation completed");
+                }, 1000);
+            }, estimatedTime * 1000);
+        } else {
+            setTimeout(() => {
+                hideLoading();
+            }, estimatedTime * 1000);
+        }
+
+    } catch (error) {
+        console.error("Failed to generate traffic:", error);
+        const loadingText = loadingOverlay.querySelector(".loading-text");
+        loadingText.textContent = `Error: ${error.message}`;
+        
+        setTimeout(() => {
+            hideLoading();
+        }, 3000);
+    }
+}
+
+function setupTrafficButton() {
+    getElements();
+    if (trafficBtn) {
+        trafficBtn.addEventListener("click", (e) => {
+            e.preventDefault();
+            console.log("🚀 Traffic button clicked");
+            generateTraffic();
+        });
+        console.log("✅ Traffic button initialized");
+    } else {
+        console.error("❌ Traffic button not found! Retrying...");
+        setTimeout(setupTrafficButton, 100);
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupTrafficButton);
+} else {
+    setupTrafficButton();
+}

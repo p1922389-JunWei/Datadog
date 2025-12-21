@@ -8,8 +8,10 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_HOST = os.environ.get("API_HOST", "localhost")
-URL = f"http://{API_HOST}:8000/chat"
+API_URL = os.environ.get("API_URL", os.environ.get("API_HOST", "http://localhost:8000"))
+if not API_URL.startswith("http"):
+    API_URL = f"http://{API_URL}:8000"
+URL = f"{API_URL}/chat"
 
 NORMAL_PROMPTS = [
     "Explain quantum physics like I'm 5.",
