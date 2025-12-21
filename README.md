@@ -18,6 +18,9 @@ This will automatically:
 - Open `http://localhost:8000`
 - View message logs and chat with the AI
 
+**Activating application without command (Optional)**
+- After building the application, your docker should have the application attached. You may activate the application by pressing the play button
+
 **Stop the application:**
 ```bash
 docker-compose down
