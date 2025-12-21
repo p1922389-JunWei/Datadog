@@ -2,7 +2,7 @@
 **Requirements:**
 
 Make sure you install Docker Desktop. With this, you don't need to create venv.
-All you have to do create the .env file and ask Jun Wei for the env keys
+All you have to do is create the .env file and ask Jun Wei for the env keys.
 
 **Start the application:**
 ```bash
