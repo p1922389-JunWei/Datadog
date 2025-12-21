@@ -29,8 +29,8 @@ services:
       - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
       - dd-agent-logs:/opt/datadog-agent/run:rw
     ports:
-      - "8126:8126"  # APM
-      - "8125:8125/udp"  # StatsD
+      - "8126:8126" 
+      - "8125:8125/udp"
 
   api:
     build: .
