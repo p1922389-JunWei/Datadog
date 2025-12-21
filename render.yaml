@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: gemini-chat-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-flash-latest
+      - key: DD_SERVICE
+        value: gemini-chat-api
+      - key: DD_ENV
+        value: production
+      - key: DD_VERSION
+        value: 1.0.0
+      - key: DD_API_KEY
+        sync: false
+      - key: DD_APP_KEY
+        sync: false
+      - key: REDIS_URL
+        fromDatabase:
+          name: redis
+          property: connectionString
+      - key: REDIS_HOST
+        fromDatabase:
+          name: redis
+          property: host
+      - key: REDIS_PORT
+        fromDatabase:
+          name: redis
+          property: port
+      - key: REDIS_DB
+        value: 0
+      - key: CACHE_TTL_SECONDS
+        value: 3600
+      - key: JAILBREAK_KEYWORDS
+        value: ignore
+      - key: PORT
+        value: 8000
+
+databases:
+  - name: redis
+    databaseName: redis
+    plan: free
+    type: redis
+
