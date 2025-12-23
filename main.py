@@ -217,14 +217,18 @@ class ChatResponse(BaseModel):
 async def chat_endpoint(request: ChatRequest) -> ChatResponse:
     span = tracer.current_span()
     
+    user_region = "SouthEast Asia" if "sg" in request.user_id.lower() else "North America"
+    
     if span:
         span.set_tag("user.id", request.user_id)
         span.set_tag("prompt.length", len(request.prompt))
+        span.set_tag("user.region", user_region)
     
     chat_history.append({
         "role": "user",
         "content": request.prompt,
         "user_id": request.user_id,
+        "region": user_region,
         "timestamp": datetime.now().isoformat()
     })
     
