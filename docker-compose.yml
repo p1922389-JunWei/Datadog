@@ -45,6 +45,9 @@ services:
       - DD_SERVICE=${DD_SERVICE:-gemini-chat-api}
       - DD_ENV=${DD_ENV:-development}
       - DD_VERSION=${DD_VERSION:-1.0.0}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=${DD_SITE:-datadoghq.com}
     depends_on:
       redis:
         condition: service_healthy
