@@ -28,8 +28,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 dd_agent_host = os.getenv('DD_AGENT_HOST', '127.0.0.1')
-if dd_agent_host == 'datadog-agent':
-    dd_agent_host = '127.0.0.1'
 
 try:
     statsd_options = {
